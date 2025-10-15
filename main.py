@@ -25,16 +25,20 @@ async def api_cooldown():
     if time_since_last_call < 1.5: await asyncio.sleep(1.5 - time_since_last_call)
     LAST_API_CALL_TIME = time.time()
 
-async def make_robust_request(session, url, params=None, retries=3, delay=5):
+# FIX: Increased timeout and explicit TimeoutError handling
+async def make_robust_request(session, url, params=None, retries=3, delay=5, timeout=30):
     for attempt in range(retries):
         try:
-            async with session.get(url, params=params, headers=REQUEST_HEADERS, timeout=15) as response:
+            async with session.get(url, params=params, headers=REQUEST_HEADERS, timeout=timeout) as response:
                 response.raise_for_status()
                 return await response.text()
+        except asyncio.TimeoutError:
+            logging.warning(f"Timeout on attempt {attempt + 1}/{retries} for {url}")
         except aiohttp.ClientError as e:
             logging.warning(f"Request error on attempt {attempt + 1}/{retries} for {url}: {e}")
-            if attempt < retries - 1: await asyncio.sleep(delay)
-            else: logging.error(f"All {retries} attempts failed for URL: {url}. Skipping.")
+        
+        if attempt < retries - 1: await asyncio.sleep(delay)
+        else: logging.error(f"All {retries} attempts failed for URL: {url}. Skipping.")
     return None
 
 def get_cached_tickers(cache_file, fetch_function):
@@ -60,22 +64,17 @@ def fetch_tsx_tickers_sync():
     except Exception: return ["RY.TO", "TD.TO", "ENB.TO", "SHOP.TO"]
 
 async def fetch_finviz_news_async(session, ticker):
-    """NEW: Fetches ticker-specific news from Finviz to save NewsAPI calls."""
     url = f"https://finviz.com/quote.ashx?t={ticker}"
     content = await make_robust_request(session, url)
     if not content: return []
     soup = BeautifulSoup(content, 'html.parser')
     news_table = soup.find(id='news-table')
     if not news_table: return []
-    
-    articles = []
-    for row in news_table.findAll('tr'):
-        if row.a:
-            articles.append({"title": row.a.text, "url": row.a['href']})
-    return articles
+    return [{"title": row.a.text, "url": row.a['href']} for row in news_table.findAll('tr') if row.a]
 
 async def fetch_news_analysis(session, query, source_api="gdelt"):
     articles = []
+    keywords = query.lower().replace('"', '').split(" or ")
     if source_api == "gdelt":
         gdelt_query = f"({query})"
         content = await make_robust_request(session, "https://api.gdeltproject.org/api/v2/doc/doc", params={"query": gdelt_query, "mode": "artlist", "maxrecords": 50, "format": "json", "timespan": "7d"})
@@ -83,16 +82,38 @@ async def fetch_news_analysis(session, query, source_api="gdelt"):
     elif source_api == "newsapi" and NEWSAPI_KEY:
         await api_cooldown()
         news_query = f"({query})"
-        content = await make_robust_request(session, f"https://newsapi.org/v2/everything?q={requests.utils.quote(news_query)}&pageSize=20&apiKey={NEWSAPI_KEY}")
+        content = await make_robust_request(session, f"https://newsapi.org/v2/everything?q={requests.utils.quote(news_query)}&pageSize=30&apiKey={NEWSAPI_KEY}")
         if content: articles = json.loads(content).get("articles", [])
 
-    return articles
+    found_articles = []
+    for article in articles:
+        title = article.get("title", "").lower()
+        if any(keyword in title for keyword in keywords):
+            source_name = article.get("sourcecountry", "N/A") if source_api == "gdelt" else article.get("source", {}).get("name", "N/A")
+            found_articles.append({"title": article.get("title"), "url": article.get("url"), "source": source_name})
+    return found_articles
 
+# FIX: Added intelligent fallback logic
 async def fetch_macro_sentiment():
     async with aiohttp.ClientSession() as session:
         logging.info("🌍 Fetching Global Macro Sentiment...")
-        geo_articles = await fetch_news_analysis(session, "war OR conflict OR military OR attack OR invasion")
-        trade_articles = await fetch_news_analysis(session, '"trade war" OR tariff OR sanctions')
+        
+        # Plan A: Try GDELT first
+        geo_query = "war OR conflict OR military OR attack OR invasion"
+        trade_query = '"trade war" OR tariff OR sanctions'
+        
+        geo_articles = await fetch_news_analysis(session, geo_query, source_api="gdelt")
+        trade_articles = await fetch_news_analysis(session, trade_query, source_api="gdelt")
+
+        # Plan B: If GDELT fails, use NewsAPI as a fallback
+        if not geo_articles:
+            logging.warning("GDELT failed for geo-political news. Falling back to NewsAPI.")
+            geo_articles = await fetch_news_analysis(session, geo_query, source_api="newsapi")
+        if not trade_articles:
+            logging.warning("GDELT failed for trade news. Falling back to NewsAPI.")
+            trade_articles = await fetch_news_analysis(session, trade_query, source_api="newsapi")
+
+        # Economic news primarily from NewsAPI
         econ_articles = await fetch_news_analysis(session, '"interest rates" OR inflation OR recession OR "gdp growth"', source_api="newsapi")
 
         geopolitical_risk = min((len(geo_articles) / 20.0) * 100, 100)
@@ -105,10 +126,11 @@ async def fetch_macro_sentiment():
         
         overall_macro_score = -(geopolitical_risk / 100 * 15) - (trade_risk / 100 * 10) + (economic_sentiment * 15)
         
+        logging.info("✅ Macro sentiment analysis complete.")
         return {
-            "geopolitical_risk": geopolitical_risk, "geo_articles": [{"title": a.get("title"), "url": a.get("url"), "source": a.get("sourcecountry", "N/A")} for a in geo_articles[:5]],
-            "trade_risk": trade_risk, "trade_articles": [{"title": a.get("title"), "url": a.get("url"), "source": a.get("sourcecountry", "N/A")} for a in trade_articles[:5]],
-            "economic_sentiment": economic_sentiment, "econ_articles": [{"title": a.get("title"), "url": a.get("url"), "source": a.get("source", {}).get("name", "N/A")} for a in econ_articles[:5]],
+            "geopolitical_risk": geopolitical_risk, "geo_articles": geo_articles[:5],
+            "trade_risk": trade_risk, "trade_articles": trade_articles[:5],
+            "economic_sentiment": economic_sentiment, "econ_articles": econ_articles[:5],
             "overall_macro_score": overall_macro_score
         }
 
@@ -125,45 +147,35 @@ def compute_technical_indicators(series):
 async def analyze_asset(ticker, session, asset_type='stock'):
     try:
         yf_ticker = yf.Ticker(ticker)
-        # Run blocking I/O in separate threads to not block the event loop
         data = await asyncio.to_thread(yf_ticker.history, period="1y", interval="1d")
         if data.empty: return None
         info = await asyncio.to_thread(getattr, yf_ticker, 'info')
 
         tech = compute_technical_indicators(data["Close"])
-        
-        # Use Finviz for ticker news, saving NewsAPI
         articles = await fetch_finviz_news_async(session, ticker)
         sentiments = [analyzer.polarity_scores(a["title"]).get("compound", 0) for a in articles]
         avg_sent = sum(sentiments) / len(sentiments) if sentiments else 0
         
-        score = 50 # Base score
+        score = 50
         if tech:
-            if 40 < tech.get("rsi", 50) < 65: score += 10 # Healthy momentum
-            if tech.get("macd", 0) > tech.get("macd_signal", 0): score += 5 # Bullish trend
+            if 40 < tech.get("rsi", 50) < 65: score += 10
+            if tech.get("macd", 0) > tech.get("macd_signal", 0): score += 5
         if asset_type == 'stock':
-            if info.get('trailingPE') and 0 < info.get('trailingPE') < 35: score += 15 # Good value
-            if info.get('debtToEquity') and info.get('debtToEquity') < 100: score += 5 # Not over-leveraged
-        score += avg_sent * 20 # Weight sentiment heavily
-
-        return {
-            "ticker": ticker, "score": score, "price": data['Close'].iloc[-1],
-            "name": info.get('shortName', ticker), "sector": info.get('sector', 'N/A'),
-            "summary": info.get('longBusinessSummary', 'No summary available.')
-        }
+            if info.get('trailingPE') and 0 < info.get('trailingPE') < 35: score += 15
+            if info.get('debtToEquity') and info.get('debtToEquity') < 100: score += 5
+        score += avg_sent * 20
+        
+        return { "ticker": ticker, "score": score, "price": data['Close'].iloc[-1], "name": info.get('shortName', ticker), "sector": info.get('sector', 'N/A'), "summary": info.get('longBusinessSummary', 'No summary available.') }
     except Exception as e:
         logging.error(f"Error processing {ticker}: {e}", exc_info=False)
         return None
 
 async def main(output="print"):
     macro_data = await fetch_macro_sentiment()
-    
     sp500 = get_cached_tickers('sp500_cache.json', fetch_sp500_tickers_sync)
     tsx = get_cached_tickers('tsx_cache.json', fetch_tsx_tickers_sync)
     universe = sp500[:75] + tsx[:25]
-    
-    crypto_tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"]
-    commodity_tickers = ["GC=F", "SI=F"]
+    crypto_tickers, commodity_tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"], ["GC=F", "SI=F"]
     
     logging.info(f"Analyzing {len(universe)} stocks, {len(crypto_tickers)} cryptos, and {len(commodity_tickers)}...")
 
@@ -180,8 +192,8 @@ async def main(output="print"):
     df_crypto = pd.DataFrame(crypto_results).sort_values("score", ascending=False)
     df_commodities = pd.DataFrame(commodity_results).sort_values("score", ascending=False)
     
-    # Use precious NewsAPI call for high-level market news
-    market_news_articles = await fetch_news_analysis(asyncio.get_event_loop().run_in_executor(None, aiohttp.ClientSession), 'stock market OR investing OR equities', source_api="newsapi")
+    async with aiohttp.ClientSession() as session:
+        market_news_articles = await fetch_news_analysis(session, 'stock market OR investing OR equities', source_api="newsapi")
 
     if output == "email":
         html_email = generate_html_email(df_stocks, df_crypto, df_commodities, macro_data, market_news_articles)
@@ -191,27 +203,24 @@ async def main(output="print"):
     logging.info("✅ Done.")
 
 def generate_html_email(df_stocks, df_crypto, df_commodities, macro_data, market_news):
-    # --- Helper functions for formatting ---
     def format_articles_html(articles):
         if not articles: return "<p style='color:#888;'><i>No major news drivers detected.</i></p>"
         return "<ul style='margin:0;padding-left:20px;'>" + "".join([f'<li style="margin-bottom: 5px;"><a href="{a["url"]}" style="color: #1e3a8a; text-decoration: none;">{a["title"]}</a> <span style="color: #666;">({a["source"]})</span></li>' for a in articles]) + "</ul>"
-    
     def create_stock_table_rows(df):
         return "".join([f'<tr><td style="padding: 10px; border-bottom: 1px solid #eee;"><b>{row["ticker"]}</b><br><span style="color:#666;font-size:0.9em;">{row["name"]}</span></td><td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center; font-weight:bold; font-size: 1.1em;">{row["score"]:.0f}</td></tr>' for _, row in df.iterrows()])
 
-    # --- Build HTML sections ---
     top_by_sector = df_stocks.groupby('sector').apply(lambda x: x.nlargest(2, 'score')).reset_index(drop=True)
     sector_html = ""
-    for _, row in top_by_sector.iterrows():
-        sector_html += f'<div style="margin-bottom: 20px;"><h4>{row["sector"]} Sector Spotlight: {row["name"]} ({row["ticker"]})</h4><p style="font-size: 0.9em; color: #333; margin-top: 5px;">{row["summary"][:250]}...</p></div>'
+    for sector, group in top_by_sector.groupby('sector'):
+        if sector == 'N/A': continue
+        sector_html += f'<h4 style="margin-bottom:10px;margin-top:20px;">{sector} Sector Spotlight</h4>'
+        for _, row in group.iterrows():
+            sector_html += f'<div style="margin-bottom: 15px;"><b>{row["name"]} ({row["ticker"]})</b><p style="font-size: 0.9em; color: #333; margin: 5px 0 0 0;">{row["summary"][:250]}...</p></div>'
 
-    top10_html = create_stock_table_rows(df_stocks.head(10))
-    bottom10_html = create_stock_table_rows(df_stocks.tail(10).iloc[::-1])
-    crypto_html = create_stock_table_rows(df_crypto)
-    commodities_html = create_stock_table_rows(df_commodities)
+    top10_html, bottom10_html = create_stock_table_rows(df_stocks.head(10)), create_stock_table_rows(df_stocks.tail(10).iloc[::-1])
+    crypto_html, commodities_html = create_stock_table_rows(df_crypto), create_stock_table_rows(df_commodities)
     market_news_html = "".join([f'<div style="margin-bottom: 15px;"><b><a href="{a["url"]}" style="color: #000; text-decoration: none; font-size: 1.1em;">{a["title"]}</a></b><br><span style="color: #666; font-size: 0.9em;">Source: {a.get("source", {}).get("name", "N/A")}</span></div>' for a in market_news[:4]])
 
-    # --- The main template ---
     return f"""
     <!DOCTYPE html><html><head><style>body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background-color:#f7f7f7;}} .container{{width:100%;max-width:700px;margin:20px auto;background-color:#fff;border:1px solid #ddd;}} .header{{background-color:#0c0a09;color:#fff;padding:30px;text-align:center;}} .section{{padding:25px;border-bottom:1px solid #ddd;}} .section h2{{font-size:1.5em;color:#111;margin-top:0;}} .section h3{{font-size:1.2em;color:#333;border-bottom:2px solid #e2e8f0;padding-bottom:5px;}}</style></head><body><div class="container">
     <div class="header"><h1>Your Daily Intelligence Briefing</h1><p style="font-size:1.1em; color:#aaa;">{datetime.date.today().strftime('%A, %B %d, %Y')}</p></div>
@@ -220,10 +229,10 @@ def generate_html_email(df_stocks, df_crypto, df_commodities, macro_data, market
         <h3>Overall Macro Score: {macro_data['overall_macro_score']:.1f} / 30</h3>
         <p>This is our "weather forecast" for investors. A high positive score (+10 to +30) is like a sunny day—investors feel optimistic. A deep negative score (-10 to -30) is a storm warning, suggesting caution and a flight to safety.</p>
         <p><b>🌍 Geopolitical Risk ({macro_data['geopolitical_risk']:.0f}/100):</b> This is like checking for international storms. We scan the globe for conflict news. High scores mean choppy waters ahead, which usually makes safe havens like Gold more attractive. <br><u>Key Drivers Today:</u> {format_articles_html(macro_data['geo_articles'])}</p>
-        <p><b>🚢 Trade Risk ({macro_data['trade_risk']:.0f}/100):</b> Are the world's commercial shipping lanes open or closed? We look for talk of tariffs and trade wars. High scores can mean delays and higher costs for big international companies.</p>
-        <p><b>💼 Economic Sentiment ({macro_data['economic_sentiment']:.2f}):</b> What's the mood in the boardroom? We analyze the tone of financial news about jobs, inflation, and growth. A positive number means optimism is in the air; negative means pessimism is creeping in.</p>
+        <p><b>🚢 Trade Risk ({macro_data['trade_risk']:.0f}/100):</b> Are the world's commercial shipping lanes open or closed? We look for talk of tariffs and trade wars. High scores can mean delays and higher costs for big international companies. <br><u>Key Drivers Today:</u> {format_articles_html(macro_data['trade_articles'])}</p>
+        <p><b>💼 Economic Sentiment ({macro_data['economic_sentiment']:.2f}):</b> What's the mood in the boardroom? We analyze the tone of financial news about jobs, inflation, and growth. A positive number means optimism is in the air; negative means pessimism is creeping in. <br><u>Key Drivers Today:</u> {format_articles_html(macro_data['econ_articles'])}</p>
     </div>
-    <div class="section"><h2>SECTOR DEEP DIVE: Who's Building the Future?</h2><p>Every industry tells a story. Here, we highlight the top-scoring company from different sectors to give you a cross-section of the market's strongest narratives right now.</p>{sector_html}</div>
+    <div class="section"><h2>SECTOR DEEP DIVE: Who's Building the Future?</h2><p>Every industry tells a story. Here, we highlight the top-scoring companies from different sectors to give you a cross-section of the market's strongest narratives right now.</p>{sector_html}</div>
     <div class="section"><h2>STOCK RADAR: Today's Most Interesting Signals</h2>
         <h3>📈 Top 10 Strongest Signals</h3><p>These stocks are currently firing on all cylinders, showing a strong combination of market value, positive momentum, and good press. They're the ships catching the strongest wind.</p><table style="width:100%; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding:10px;">Company</th><th style="text-align:center; padding:10px;">Score</th></tr></thead><tbody>{top10_html}</tbody></table>
         <h3 style="margin-top: 30px;">📉 Top 10 Weakest Signals</h3><p>These stocks are currently facing headwinds, with weaker scores in our analysis. They might be undervalued opportunities or signals of underlying issues worth investigating.</p><table style="width:100%; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding:10px;">Company</th><th style="text-align:center; padding:10px;">Score</th></tr></thead><tbody>{bottom10_html}</tbody></table>
