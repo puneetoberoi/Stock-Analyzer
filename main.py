@@ -25,18 +25,14 @@ async def api_cooldown():
     if time_since_last_call < 1.5: await asyncio.sleep(1.5 - time_since_last_call)
     LAST_API_CALL_TIME = time.time()
 
-# FIX: Increased timeout and explicit TimeoutError handling
 async def make_robust_request(session, url, params=None, retries=3, delay=5, timeout=30):
     for attempt in range(retries):
         try:
             async with session.get(url, params=params, headers=REQUEST_HEADERS, timeout=timeout) as response:
                 response.raise_for_status()
                 return await response.text()
-        except asyncio.TimeoutError:
-            logging.warning(f"Timeout on attempt {attempt + 1}/{retries} for {url}")
-        except aiohttp.ClientError as e:
-            logging.warning(f"Request error on attempt {attempt + 1}/{retries} for {url}: {e}")
-        
+        except asyncio.TimeoutError: logging.warning(f"Timeout on attempt {attempt + 1}/{retries} for {url}")
+        except aiohttp.ClientError as e: logging.warning(f"Request error on attempt {attempt + 1}/{retries} for {url}: {e}")
         if attempt < retries - 1: await asyncio.sleep(delay)
         else: logging.error(f"All {retries} attempts failed for URL: {url}. Skipping.")
     return None
@@ -46,22 +42,40 @@ def get_cached_tickers(cache_file, fetch_function):
         logging.info(f"Loading tickers from cache: {cache_file}")
         with open(cache_file, 'r') as f: return json.load(f)
     tickers = fetch_function()
-    with open(cache_file, 'w') as f: json.dump(tickers, f)
+    if tickers: # Only cache if we actually got tickers
+        with open(cache_file, 'w') as f: json.dump(tickers, f)
     return tickers
 
+# FIX: Made functions guaranteed to return a list
 def fetch_sp500_tickers_sync():
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        df = pd.read_html(requests.get(url, headers=REQUEST_HEADERS, timeout=10).text)[0]
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=10)
+        response.raise_for_status()
+        df = pd.read_html(StringIO(response.text))[0] # FIX: Use StringIO to address FutureWarning
         return df["Symbol"].tolist()
-    except Exception: return pd.read_csv("https://datahub.io/core/s-and-p-500-companies/r/constituents.csv")["Symbol"].tolist()
+    except Exception as e1:
+        logging.warning(f"S&P 500 Wikipedia fetch failed: {e1}. Trying fallback.")
+        try:
+            df = pd.read_csv("https://datahub.io/core/s-and-p-500-companies/r/constituents.csv")
+            return df["Symbol"].tolist()
+        except Exception as e2:
+            logging.error(f"S&P 500 fallback also failed: {e2}. Returning empty list.")
+            return [] # Guaranteed to return a list
 
 def fetch_tsx_tickers_sync():
     try:
         url = "https://en.wikipedia.org/wiki/S%26P/TSX_Composite_Index"
-        for table in pd.read_html(requests.get(url, headers=REQUEST_HEADERS, timeout=10).text):
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=10)
+        response.raise_for_status()
+        for table in pd.read_html(StringIO(response.text)): # FIX: Use StringIO
             if 'Symbol' in table.columns: return [str(t).split(' ')[0].replace('.', '-') + ".TO" for t in table["Symbol"].tolist()]
-    except Exception: return ["RY.TO", "TD.TO", "ENB.TO", "SHOP.TO"]
+    except Exception as e:
+        logging.warning(f"TSX fetch failed: {e}. Using small static fallback.")
+        # Return a minimal list, but still a list
+        return ["RY.TO", "TD.TO", "ENB.TO", "SHOP.TO"]
+    logging.error("Could not find TSX tickers. Returning empty list.")
+    return [] # Guaranteed to return a list
 
 async def fetch_finviz_news_async(session, ticker):
     url = f"https://finviz.com/quote.ashx?t={ticker}"
@@ -73,7 +87,7 @@ async def fetch_finviz_news_async(session, ticker):
     return [{"title": row.a.text, "url": row.a['href']} for row in news_table.findAll('tr') if row.a]
 
 async def fetch_news_analysis(session, query, source_api="gdelt"):
-    articles = []
+    articles, found_articles = [], []
     keywords = query.lower().replace('"', '').split(" or ")
     if source_api == "gdelt":
         gdelt_query = f"({query})"
@@ -85,7 +99,6 @@ async def fetch_news_analysis(session, query, source_api="gdelt"):
         content = await make_robust_request(session, f"https://newsapi.org/v2/everything?q={requests.utils.quote(news_query)}&pageSize=30&apiKey={NEWSAPI_KEY}")
         if content: articles = json.loads(content).get("articles", [])
 
-    found_articles = []
     for article in articles:
         title = article.get("title", "").lower()
         if any(keyword in title for keyword in keywords):
@@ -93,37 +106,21 @@ async def fetch_news_analysis(session, query, source_api="gdelt"):
             found_articles.append({"title": article.get("title"), "url": article.get("url"), "source": source_name})
     return found_articles
 
-# FIX: Added intelligent fallback logic
 async def fetch_macro_sentiment():
     async with aiohttp.ClientSession() as session:
         logging.info("🌍 Fetching Global Macro Sentiment...")
+        geo_query, trade_query = "war OR conflict OR military OR attack OR invasion", '"trade war" OR tariff OR sanctions'
         
-        # Plan A: Try GDELT first
-        geo_query = "war OR conflict OR military OR attack OR invasion"
-        trade_query = '"trade war" OR tariff OR sanctions'
+        geo_articles = await fetch_news_analysis(session, geo_query, "gdelt")
+        if not geo_articles: geo_articles = await fetch_news_analysis(session, geo_query, "newsapi")
         
-        geo_articles = await fetch_news_analysis(session, geo_query, source_api="gdelt")
-        trade_articles = await fetch_news_analysis(session, trade_query, source_api="gdelt")
+        trade_articles = await fetch_news_analysis(session, trade_query, "gdelt")
+        if not trade_articles: trade_articles = await fetch_news_analysis(session, trade_query, "newsapi")
 
-        # Plan B: If GDELT fails, use NewsAPI as a fallback
-        if not geo_articles:
-            logging.warning("GDELT failed for geo-political news. Falling back to NewsAPI.")
-            geo_articles = await fetch_news_analysis(session, geo_query, source_api="newsapi")
-        if not trade_articles:
-            logging.warning("GDELT failed for trade news. Falling back to NewsAPI.")
-            trade_articles = await fetch_news_analysis(session, trade_query, source_api="newsapi")
+        econ_articles = await fetch_news_analysis(session, '"interest rates" OR inflation OR recession OR "gdp growth"', "newsapi")
 
-        # Economic news primarily from NewsAPI
-        econ_articles = await fetch_news_analysis(session, '"interest rates" OR inflation OR recession OR "gdp growth"', source_api="newsapi")
-
-        geopolitical_risk = min((len(geo_articles) / 20.0) * 100, 100)
-        trade_risk = min((len(trade_articles) / 15.0) * 100, 100)
-        
-        economic_sentiment = 0
-        if econ_articles:
-            sentiments = [analyzer.polarity_scores(a['title']).get('compound', 0) for a in econ_articles]
-            economic_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
-        
+        geopolitical_risk, trade_risk = min((len(geo_articles) / 20.0) * 100, 100), min((len(trade_articles) / 15.0) * 100, 100)
+        economic_sentiment = sum([analyzer.polarity_scores(a['title']).get('compound', 0) for a in econ_articles]) / len(econ_articles) if econ_articles else 0
         overall_macro_score = -(geopolitical_risk / 100 * 15) - (trade_risk / 100 * 10) + (economic_sentiment * 15)
         
         logging.info("✅ Macro sentiment analysis complete.")
@@ -131,8 +128,7 @@ async def fetch_macro_sentiment():
             "geopolitical_risk": geopolitical_risk, "geo_articles": geo_articles[:5],
             "trade_risk": trade_risk, "trade_articles": trade_articles[:5],
             "economic_sentiment": economic_sentiment, "econ_articles": econ_articles[:5],
-            "overall_macro_score": overall_macro_score
-        }
+            "overall_macro_score": overall_macro_score }
 
 def compute_technical_indicators(series):
     series = series.dropna()
@@ -153,8 +149,7 @@ async def analyze_asset(ticker, session, asset_type='stock'):
 
         tech = compute_technical_indicators(data["Close"])
         articles = await fetch_finviz_news_async(session, ticker)
-        sentiments = [analyzer.polarity_scores(a["title"]).get("compound", 0) for a in articles]
-        avg_sent = sum(sentiments) / len(sentiments) if sentiments else 0
+        avg_sent = sum([analyzer.polarity_scores(a["title"]).get("compound", 0) for a in articles]) / len(articles) if articles else 0
         
         score = 50
         if tech:
@@ -174,9 +169,9 @@ async def main(output="print"):
     macro_data = await fetch_macro_sentiment()
     sp500 = get_cached_tickers('sp500_cache.json', fetch_sp500_tickers_sync)
     tsx = get_cached_tickers('tsx_cache.json', fetch_tsx_tickers_sync)
-    universe = sp500[:75] + tsx[:25]
-    crypto_tickers, commodity_tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"], ["GC=F", "SI=F"]
+    universe = (sp500 or [])[:75] + (tsx or [])[:25] # FIX: Handle NoneType gracefully
     
+    crypto_tickers, commodity_tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"], ["GC=F", "SI=F"]
     logging.info(f"Analyzing {len(universe)} stocks, {len(crypto_tickers)} cryptos, and {len(commodity_tickers)}...")
 
     async with aiohttp.ClientSession() as session:
@@ -184,19 +179,21 @@ async def main(output="print"):
         tasks = [analyze_asset(ticker, session, 'stock' if ticker in universe else 'crypto' if ticker in crypto_tickers else 'commodity') for ticker in all_tickers]
         results = await asyncio.gather(*tasks)
 
-    stock_results = [r for r in results[:len(universe)] if r]
-    crypto_results = [r for r in results[len(universe):len(universe)+len(crypto_tickers)] if r]
-    commodity_results = [r for r in results[len(universe)+len(crypto_tickers):] if r]
+    stock_results, crypto_results, commodity_results = [], [], []
+    if results:
+        stock_results = [r for r in results[:len(universe)] if r]
+        crypto_results = [r for r in results[len(universe):len(universe)+len(crypto_tickers)] if r]
+        commodity_results = [r for r in results[len(universe)+len(crypto_tickers):] if r]
 
-    df_stocks = pd.DataFrame(stock_results).sort_values("score", ascending=False)
-    df_crypto = pd.DataFrame(crypto_results).sort_values("score", ascending=False)
-    df_commodities = pd.DataFrame(commodity_results).sort_values("score", ascending=False)
+    df_stocks = pd.DataFrame(stock_results).sort_values("score", ascending=False) if stock_results else pd.DataFrame()
+    df_crypto = pd.DataFrame(crypto_results).sort_values("score", ascending=False) if crypto_results else pd.DataFrame()
+    df_commodities = pd.DataFrame(commodity_results).sort_values("score", ascending=False) if commodity_results else pd.DataFrame()
     
-    async with aiohttp.ClientSession() as session:
-        market_news_articles = await fetch_news_analysis(session, 'stock market OR investing OR equities', source_api="newsapi")
+    # FIX: Reuse existing econ_articles for market news, eliminating the final API call
+    market_news = macro_data.get("econ_articles", [])
 
     if output == "email":
-        html_email = generate_html_email(df_stocks, df_crypto, df_commodities, macro_data, market_news_articles)
+        html_email = generate_html_email(df_stocks, df_crypto, df_commodities, macro_data, market_news)
         send_email(html_email)
     else: print(df_stocks.head(10))
 
@@ -209,17 +206,20 @@ def generate_html_email(df_stocks, df_crypto, df_commodities, macro_data, market
     def create_stock_table_rows(df):
         return "".join([f'<tr><td style="padding: 10px; border-bottom: 1px solid #eee;"><b>{row["ticker"]}</b><br><span style="color:#666;font-size:0.9em;">{row["name"]}</span></td><td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center; font-weight:bold; font-size: 1.1em;">{row["score"]:.0f}</td></tr>' for _, row in df.iterrows()])
 
-    top_by_sector = df_stocks.groupby('sector').apply(lambda x: x.nlargest(2, 'score')).reset_index(drop=True)
     sector_html = ""
-    for sector, group in top_by_sector.groupby('sector'):
-        if sector == 'N/A': continue
-        sector_html += f'<h4 style="margin-bottom:10px;margin-top:20px;">{sector} Sector Spotlight</h4>'
-        for _, row in group.iterrows():
-            sector_html += f'<div style="margin-bottom: 15px;"><b>{row["name"]} ({row["ticker"]})</b><p style="font-size: 0.9em; color: #333; margin: 5px 0 0 0;">{row["summary"][:250]}...</p></div>'
+    if not df_stocks.empty:
+        top_by_sector = df_stocks.groupby('sector').apply(lambda x: x.nlargest(2, 'score')).reset_index(drop=True)
+        for sector, group in top_by_sector.groupby('sector'):
+            if sector == 'N/A' or sector is None: continue
+            sector_html += f'<h4 style="margin-bottom:10px;margin-top:20px;">{sector} Sector Spotlight</h4>'
+            for _, row in group.iterrows():
+                sector_html += f'<div style="margin-bottom: 15px;"><b>{row["name"]} ({row["ticker"]})</b><p style="font-size: 0.9em; color: #333; margin: 5px 0 0 0;">{row["summary"][:250]}...</p></div>'
 
-    top10_html, bottom10_html = create_stock_table_rows(df_stocks.head(10)), create_stock_table_rows(df_stocks.tail(10).iloc[::-1])
-    crypto_html, commodities_html = create_stock_table_rows(df_crypto), create_stock_table_rows(df_commodities)
-    market_news_html = "".join([f'<div style="margin-bottom: 15px;"><b><a href="{a["url"]}" style="color: #000; text-decoration: none; font-size: 1.1em;">{a["title"]}</a></b><br><span style="color: #666; font-size: 0.9em;">Source: {a.get("source", {}).get("name", "N/A")}</span></div>' for a in market_news[:4]])
+    top10_html = create_stock_table_rows(df_stocks.head(10)) if not df_stocks.empty else "<tr><td>No data</td></tr>"
+    bottom10_html = create_stock_table_rows(df_stocks.tail(10).iloc[::-1]) if not df_stocks.empty else "<tr><td>No data</td></tr>"
+    crypto_html = create_stock_table_rows(df_crypto) if not df_crypto.empty else "<tr><td>No data</td></tr>"
+    commodities_html = create_stock_table_rows(df_commodities) if not df_commodities.empty else "<tr><td>No data</td></tr>"
+    market_news_html = "".join([f'<div style="margin-bottom: 15px;"><b><a href="{a["url"]}" style="color: #000; text-decoration: none; font-size: 1.1em;">{a["title"]}</a></b><br><span style="color: #666; font-size: 0.9em;">Source: {a.get("source", "N/A")}</span></div>' for a in market_news[:4]])
 
     return f"""
     <!DOCTYPE html><html><head><style>body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background-color:#f7f7f7;}} .container{{width:100%;max-width:700px;margin:20px auto;background-color:#fff;border:1px solid #ddd;}} .header{{background-color:#0c0a09;color:#fff;padding:30px;text-align:center;}} .section{{padding:25px;border-bottom:1px solid #ddd;}} .section h2{{font-size:1.5em;color:#111;margin-top:0;}} .section h3{{font-size:1.2em;color:#333;border-bottom:2px solid #e2e8f0;padding-bottom:5px;}}</style></head><body><div class="container">
