@@ -585,4 +585,3 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="print", choices=["print", "email", "slack"], help="Output destination for the report.")
     args = parser.parse_args()
     main(output=args.output)
-```
