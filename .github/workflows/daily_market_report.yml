@@ -21,8 +21,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ta pandas yfinance requests numpy aiohttp html5lib tabulate beautifulsoup4 lxml markdown vaderSentiment
-
+          pip install pandas yfinance requests numpy aiohttp beautifulsoup4 lxml vaderSentiment ta asyncio-throttle playwright
+          python -m playwright install --with-deps chromium
+          
       - name: Run daily market report
         env:
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
