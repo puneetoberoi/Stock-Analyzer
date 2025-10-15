@@ -1,0 +1,14 @@
+yfinance
+pandas
+numpy
+requests
+python-dateutil
+PyYAML
+pandas_ta
+ta
+finnhub-python
+newsapi-python
+beautifulsoup4
+lxml
+scikit-learn
+vaderSentiment
