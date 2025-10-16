@@ -1,40 +1,40 @@
 {
   "start_date": "2025-10-16",
   "watchlist": [
-    "ALB",
-    "AWK",
-    "MSFT",
-    "BRK-B",
-    "BK",
-    "APD",
-    "TSLA",
-    "AON",
-    "AMAT",
-    "APTV",
-    "BAX",
     "AIZ",
-    "AMGN",
-    "TSM",
-    "ABBV",
-    "AJG",
-    "ALLE",
-    "AXON",
-    "AMD",
-    "AAPL",
-    "BKNG",
     "TD",
-    "BAC",
-    "ABT",
-    "GOOGL",
-    "MMM",
+    "AAPL",
+    "AWK",
+    "BKNG",
+    "APD",
     "ARE",
-    "AMZN",
     "AXP",
-    "TECH",
-    "BBY",
+    "ABBV",
+    "AMD",
+    "AMGN",
+    "BAX",
+    "ALB",
     "NVDA",
+    "TSM",
+    "GOOGL",
+    "ALLE",
+    "MMM",
+    "TECH",
+    "TSLA",
+    "MO",
+    "APTV",
+    "AXON",
+    "ABT",
     "ADP",
-    "MO"
+    "AJG",
+    "AMZN",
+    "BAC",
+    "BK",
+    "MSFT",
+    "BBY",
+    "BRK-B",
+    "AON",
+    "AMAT"
   ],
   "processed_tickers": [],
   "full_watchlist_data": [
@@ -55,10 +55,6 @@
       "sector": "Consumer Cyclical"
     },
     {
-      "ticker": "AXP",
-      "sector": "Financial Services"
-    },
-    {
       "ticker": "BRK-B",
       "sector": "Financial Services"
     },
@@ -69,6 +65,10 @@
     {
       "ticker": "MMM",
       "sector": "Industrials"
+    },
+    {
+      "ticker": "AXP",
+      "sector": "Financial Services"
     },
     {
       "ticker": "ABT",
@@ -123,10 +123,6 @@
       "sector": "Healthcare"
     },
     {
-      "ticker": "MSFT",
-      "sector": "Technology"
-    },
-    {
       "ticker": "AON",
       "sector": "Financial Services"
     },
@@ -135,8 +131,16 @@
       "sector": "Healthcare"
     },
     {
+      "ticker": "MSFT",
+      "sector": "Technology"
+    },
+    {
       "ticker": "AMAT",
       "sector": "Technology"
+    },
+    {
+      "ticker": "ALB",
+      "sector": "Basic Materials"
     },
     {
       "ticker": "TSLA",
@@ -169,10 +173,6 @@
     {
       "ticker": "AMD",
       "sector": "Technology"
-    },
-    {
-      "ticker": "ALB",
-      "sector": "Basic Materials"
     }
   ]
 }
