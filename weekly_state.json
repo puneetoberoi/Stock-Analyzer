@@ -1,173 +1,39 @@
 {
   "start_date": "2025-10-16",
   "watchlist": [
-    "AMZN",
-    "AAPL",
-    "ABT",
-    "AMGN",
-    "MMM",
-    "AXP",
-    "BBY",
-    "BAX",
-    "MSFT",
-    "AON",
-    "ABBV",
-    "BK",
-    "BAC",
-    "NVDA",
-    "GOOGL",
-    "BKNG",
-    "MO",
+    "ADBE",
+    "AZO",
+    "BDX",
+    "RY.TO",
     "AXON",
-    "BRK-B",
-    "AMD",
-    "TD",
-    "AWK",
-    "APD",
-    "AJG",
-    "AMAT",
-    "APTV",
-    "ALLE",
-    "AIZ",
-    "TECH",
-    "ALB",
-    "ADP",
+    "BALL",
+    "ARE",
+    "ACGL",
     "TSLA",
-    "TSM"
+    "ABBV",
+    "ATO",
+    "AJG",
+    "AON",
+    "ALLE",
+    "AMAT",
+    "BSX",
+    "AAPL",
+    "APH",
+    "TSM",
+    "ADSK",
+    "AMD",
+    "APD",
+    "BLK",
+    "BK",
+    "GOOGL",
+    "MSFT",
+    "TD",
+    "ALGN",
+    "ADP",
+    "NVDA",
+    "BX",
+    "AIG",
+    "BIIB"
   ],
-  "processed_tickers": [],
-  "full_watchlist_data": [
-    {
-      "ticker": "BBY",
-      "sector": "Consumer Cyclical"
-    },
-    {
-      "ticker": "MO",
-      "sector": "Consumer Defensive"
-    },
-    {
-      "ticker": "AWK",
-      "sector": "Utilities"
-    },
-    {
-      "ticker": "APTV",
-      "sector": "Consumer Cyclical"
-    },
-    {
-      "ticker": "BRK-B",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "BAC",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "MMM",
-      "sector": "Industrials"
-    },
-    {
-      "ticker": "AXP",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "ABT",
-      "sector": "Healthcare"
-    },
-    {
-      "ticker": "BK",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "AMZN",
-      "sector": "Consumer Cyclical"
-    },
-    {
-      "ticker": "ALLE",
-      "sector": "Industrials"
-    },
-    {
-      "ticker": "AIZ",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "TSM",
-      "sector": "Technology"
-    },
-    {
-      "ticker": "AMGN",
-      "sector": "Healthcare"
-    },
-    {
-      "ticker": "TD",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "AAPL",
-      "sector": "Technology"
-    },
-    {
-      "ticker": "NVDA",
-      "sector": "Technology"
-    },
-    {
-      "ticker": "TECH",
-      "sector": "Healthcare"
-    },
-    {
-      "ticker": "ABBV",
-      "sector": "Healthcare"
-    },
-    {
-      "ticker": "GOOGL",
-      "sector": "Communication Services"
-    },
-    {
-      "ticker": "AON",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "BAX",
-      "sector": "Healthcare"
-    },
-    {
-      "ticker": "MSFT",
-      "sector": "Technology"
-    },
-    {
-      "ticker": "AMAT",
-      "sector": "Technology"
-    },
-    {
-      "ticker": "ALB",
-      "sector": "Basic Materials"
-    },
-    {
-      "ticker": "TSLA",
-      "sector": "Consumer Cyclical"
-    },
-    {
-      "ticker": "ADP",
-      "sector": "Technology"
-    },
-    {
-      "ticker": "AXON",
-      "sector": "Industrials"
-    },
-    {
-      "ticker": "AJG",
-      "sector": "Financial Services"
-    },
-    {
-      "ticker": "APD",
-      "sector": "Basic Materials"
-    },
-    {
-      "ticker": "BKNG",
-      "sector": "Consumer Cyclical"
-    },
-    {
-      "ticker": "AMD",
-      "sector": "Technology"
-    }
-  ]
+  "processed_tickers": []
 }
