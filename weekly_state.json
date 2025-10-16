@@ -37,5 +37,11 @@
     "AMD",
     "AIZ"
   ],
-  "processed_tickers": []
+  "processed_tickers": [
+    "MMM",
+    "AXP",
+    "APTV",
+    "NVDA",
+    "AWK"
+  ]
 }
