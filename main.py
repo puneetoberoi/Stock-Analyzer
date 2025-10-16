@@ -21,7 +21,7 @@ PORTFOLIO_FILE = "portfolio.json"
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 analyzer = SentimentIntensityAnalyzer()
 
-# ---------- STABLE, UNCHANGED HELPERS (from our last working version) ----------
+# ---------- STABLE, UNCHANGED HELPERS ----------
 
 async def make_robust_request(session, url, params=None, retries=3, delay=5, timeout=20):
     for attempt in range(retries):
@@ -56,63 +56,40 @@ def fetch_tsx_tickers_sync():
     except Exception: return ["RY.TO", "TD.TO", "ENB.TO", "SHOP.TO"]
     return []
 
-# --- MODIFIED & NEW SCRAPERS for Corporate Intelligence ---
-
 async def fetch_finviz_data_throttled(throttler, session, ticker):
-    """MODIFIED: Now extracts both general news and specific press releases."""
     async with throttler:
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         content = await make_robust_request(session, url)
-        if not content: return [], [] # Return two empty lists
-
+        if not content: return [], []
         soup = BeautifulSoup(content, 'html.parser')
         news_table = soup.find(id='news-table')
         if not news_table: return [], []
-
         general_news, press_releases = [], []
         for row in news_table.find_all('tr'):
             if row.a:
-                title = row.a.text
-                link = row.a['href']
+                title, link = row.a.text, row.a['href']
                 source = row.span.text.strip() if row.span else "N/A"
-                # Heuristic to identify press releases
-                if "Business Wire" in source or "PR Newswire" in source or "GlobeNewswire" in source:
+                if any(pr_source in source for pr_source in ["Business Wire", "PR Newswire", "GlobeNewswire"]):
                     press_releases.append({"title": title, "url": link})
                 else:
                     general_news.append({"title": title, "url": link})
-        
         return general_news, press_releases
 
 async def fetch_yahoo_earnings_throttled(throttler, session, ticker):
-    """NEW: Fetches earnings data from Yahoo Finance's Analysis page."""
     async with throttler:
         url = f"https://finance.yahoo.com/quote/{ticker}/analysis"
         content = await make_robust_request(session, url)
         if not content: return {}
-
         soup = BeautifulSoup(content, 'html.parser')
-        earnings_data = {}
         try:
-            # Find the "Earnings History" table
-            tables = soup.find_all('table')
-            for table in tables:
-                headers = [th.text for th in table.find_all('th')]
-                if "EPS Est." in headers and "EPS Actual" in headers:
-                    last_quarter_row = table.find('tbody').find('tr')
-                    cols = last_quarter_row.find_all('td')
-                    earnings_data['last_eps_est'] = cols[1].text
-                    earnings_data['last_eps_actual'] = cols[2].text
-                    earnings_data['surprise'] = cols[4].text
-                    break
-        except Exception as e:
-            logging.warning(f"Could not parse earnings history for {ticker}: {e}")
-        
-        return earnings_data
-
-# --- UNCHANGED STABLE FUNCTIONS ---
+            for table in soup.find_all('table'):
+                if "EPS Est." in [th.text for th in table.find_all('th')]:
+                    cols = table.find('tbody').find('tr').find_all('td')
+                    return {'last_eps_est': cols[1].text, 'last_eps_actual': cols[2].text, 'surprise': cols[4].text}
+        except Exception: pass
+        return {}
 
 async def fetch_market_headlines():
-    logging.info("Fetching market headlines...")
     async with aiohttp.ClientSession() as session:
         try:
             content = await make_robust_request(session, "https://www.reuters.com/markets/")
@@ -166,41 +143,20 @@ def compute_technical_indicators(series):
     latest = df.iloc[-1].fillna(0)
     return {"rsi": float(latest.get("rsi_14", 50)), "macd": float(latest.get("macd", 0))}
 
-# --- MODIFIED: The Core Analysis function is now upgraded ---
-
 async def analyze_stock(semaphore, throttler, session, ticker):
     async with semaphore:
         try:
             yf_ticker = yf.Ticker(ticker)
-            # Run all I/O-bound tasks concurrently for max efficiency
-            data_task = asyncio.to_thread(yf_ticker.history, period="1y", interval="1d")
-            info_task = asyncio.to_thread(getattr, yf_ticker, 'info')
-            finviz_task = fetch_finviz_data_throttled(throttler, session, ticker)
-            earnings_task = fetch_yahoo_earnings_throttled(throttler, session, ticker)
-            
-            data, info, (general_news, press_releases), earnings_data = await asyncio.gather(
-                data_task, info_task, finviz_task, earnings_task
-            )
-
+            data_task, info_task, finviz_task, earnings_task = asyncio.to_thread(yf_ticker.history, period="1y", interval="1d"), asyncio.to_thread(getattr, yf_ticker, 'info'), fetch_finviz_data_throttled(throttler, session, ticker), fetch_yahoo_earnings_throttled(throttler, session, ticker)
+            data, info, (general_news, press_releases), earnings_data = await asyncio.gather(data_task, info_task, finviz_task, earnings_task)
             if data.empty: return None
-
             avg_sent = sum(analyzer.polarity_scores(a["title"]).get("compound", 0) for a in general_news) / len(general_news) if general_news else 0
-            
             score = 50 + (avg_sent * 20)
             if (tech := compute_technical_indicators(data["Close"])):
                 if 40 < tech.get("rsi", 50) < 65: score += 15
             if info.get('trailingPE') and 0 < info.get('trailingPE') < 35: score += 15
-            
-            return {
-                "ticker": ticker, "score": score,
-                "name": info.get('shortName', ticker), "sector": info.get('sector', 'N/A'),
-                "summary": info.get('longBusinessSummary', None),
-                "press_releases": press_releases[:3], # Return top 3 press releases
-                "earnings_data": earnings_data # Return earnings data
-            }
-        except Exception as e:
-            if '$' not in str(e): logging.error(f"Error in analyze_stock for {ticker}: {e}", exc_info=False)
-            return None
+            return { "ticker": ticker, "score": score, "name": info.get('shortName', ticker), "sector": info.get('sector', 'N/A'), "summary": info.get('longBusinessSummary', None), "press_releases": press_releases[:3], "earnings_data": earnings_data }
+        except Exception: return None
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -210,7 +166,56 @@ def load_memory():
 def save_memory(data):
     with open(MEMORY_FILE, 'w') as f: json.dump(data, f)
 
-# --- MODIFIED: The Daily Deep Dive email template is now much richer ---
+# --- EMAIL TEMPLATES ---
+
+# FIX: RESTORED THE FULL MONDAY EMAIL TEMPLATE
+def generate_html_email(df_stocks, context, market_news, macro_data, memory, is_monday=False):
+    def format_articles(articles):
+        if not articles: return "<p style='color:#888;'><i>No specific news drivers detected.</i></p>"
+        return "<ul style='margin:0;padding-left:20px;'>" + "".join([f'<li style="margin-bottom:5px;"><a href="{a["url"]}" style="color:#1e3a8a;">{a["title"]}</a> <span style="color:#666;">({a["source"]})</span></li>' for a in articles]) + "</ul>"
+    def create_stock_table(df):
+        return "".join([f'<tr><td style="padding:10px;border-bottom:1px solid #eee;"><b>{row["ticker"]}</b><br><span style="color:#666;font-size:0.9em;">{row["name"]}</span></td><td style="padding:10px;border-bottom:1px solid #eee;text-align:center;font-weight:bold;font-size:1.1em;">{row["score"]:.0f}</td></tr>' for _, row in df.iterrows()])
+    def create_context_table(ids):
+        rows=""
+        for asset_id in ids:
+            if asset := context.get(asset_id):
+                price, change_24h = f"${asset.get('current_price', 0):,.2f}", asset.get('price_change_percentage_24h', 0) or 0
+                mcap = f"${asset.get('market_cap', 0) / 1_000_000_000:.1f}B" if asset.get('market_cap') else "N/A"
+                color_24h = "#16a34a" if change_24h >= 0 else "#dc2626"
+                rows += f'<tr><td style="padding:10px;border-bottom:1px solid #eee;"><b>{asset.get("name", "")}</b><br><span style="color:#666;font-size:0.9em;">{asset.get("symbol","").upper()}</span></td><td style="padding:10px;border-bottom:1px solid #eee;">{price}<br><span style="color:{color_24h};font-size:0.9em;">{change_24h:.2f}% (24h)</span></td><td style="padding:10px;border-bottom:1px solid #eee;">{mcap}</td></tr>'
+        return rows
+
+    prev_score, current_score = memory.get('previous_macro_score', 0), macro_data.get('overall_macro_score', 0)
+    mood_change = "stayed relatively stable"
+    if (diff := current_score - prev_score) > 3: mood_change = f"improved since yesterday (from {prev_score:.1f} to {current_score:.1f})"
+    elif diff < -3: mood_change = f"turned more cautious since yesterday (from {prev_score:.1f} to {current_score:.1f})"
+    editor_note = f"Good morning. The overall market mood has {mood_change}. This briefing is your daily blueprint for navigating the currents."
+    if memory.get('previous_top_stock_name'): editor_note += f"<br><br><b>Yesterday's Champion:</b> {memory['previous_top_stock_name']} ({memory['previous_top_stock_ticker']}) led our rankings. Let's see what's changed."
+
+    sector_html = ""
+    if not df_stocks.empty:
+        top_by_sector = df_stocks.groupby('sector', group_keys=False).apply(lambda x: x.nlargest(2, 'score'))
+        for _, row in top_by_sector.iterrows():
+            if not(row['sector'] and row['sector'] != 'N/A'): continue
+            summary_text = "Business summary not available."
+            if row["summary"] and isinstance(row["summary"], str): summary_text = '. '.join(row["summary"].split('. ')[:2]) + '.'
+            sector_html += f'<div style="margin-bottom:15px;"><b>{row["name"]} ({row["ticker"]})</b> in <i>{row["sector"]}</i><p style="font-size:0.9em;color:#333;margin:5px 0 0 0;">{summary_text}</p></div>'
+
+    top10_html, bottom10_html = create_stock_table(df_stocks.head(10)), create_stock_table(df_stocks.tail(10).iloc[::-1])
+    crypto_html, commodities_html = create_context_table(["bitcoin", "ethereum", "solana", "ripple"]), create_context_table(["gold", "silver"])
+    market_news_html = "".join([f'<div style="margin-bottom:15px;"><b><a href="{a["url"]}" style="color:#000;">{a["title"]}</a></b><br><span style="color:#666;font-size:0.9em;">{a.get("source", "N/A")}</span></div>' for a in market_news]) or "<p><i>Headlines not available today.</i></p>"
+    
+    return f"""
+    <!DOCTYPE html><html><head><style>body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background-color:#f7f7f7;}} .container{{width:100%;max-width:700px;margin:20px auto;background-color:#fff;border:1px solid #ddd;}} .header{{background-color:#0c0a09;color:#fff;padding:30px;text-align:center;}} .section{{padding:25px;border-bottom:1px solid #ddd;}} h2{{font-size:1.5em;color:#111;margin-top:0;}} h3{{font-size:1.2em;color:#333;border-bottom:2px solid #e2e8f0;padding-bottom:5px;}}</style></head><body><div class="container">
+    <div class="header"><h1>Your Weekly Market Setter</h1><p style="font-size:1.1em; color:#aaa;">{datetime.date.today().strftime('%A, %B %d, %Y')}</p></div>
+    <div class="section"><h2>EDITOR’S NOTE</h2><p>{editor_note}</p></div>
+    <div class="section"><h2>THE BIG PICTURE: The Market Weather Report</h2><h3>Overall Macro Score: {macro_data['overall_macro_score']:.1f} / 30</h3><p><b>How it's calculated:</b> A blend of the three scores below. Positive suggests optimism ("risk-on"), negative signals caution ("risk-off").</p><p><b>🌍 Geopolitical Risk ({macro_data['geopolitical_risk']:.0f}/100):</b> Measures global instability by scanning news for conflict keywords.<br><u>Key Drivers:</u> {format_articles(macro_data['geo_articles'])}</p><p><b>🚢 Trade Risk ({macro_data['trade_risk']:.0f}/100):</b> Tracks mentions of 'trade war', 'tariffs', etc.<br><u>Key Drivers:</u> {format_articles(macro_data['trade_articles'])}</p><p><b>💼 Economic Sentiment ({macro_data['economic_sentiment']:.2f}):</b> Analyzes the tone of news about inflation, rates, and growth (-1 to +1).<br><u>Key Drivers:</u> {format_articles(macro_data['econ_articles'])}</p></div>
+    <div class="section"><h2>SECTOR DEEP DIVE</h2><p>Here are the top-scoring companies from different sectors.</p>{sector_html}</div>
+    <div class="section"><h2>STOCK RADAR</h2><h3>📈 Top 10 Strongest Signals</h3><p><b>How it's calculated:</b> Stocks are scored (0-100) on a blend of valuation (P/E), momentum (RSI), and news sentiment.</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Company</th><th style="text-align:center;padding:10px;">Score</th></tr></thead><tbody>{top10_html}</tbody></table><h3 style="margin-top:30px;">📉 Top 10 Weakest Signals</h3><p>These stocks are facing headwinds. This is a prompt to investigate why.</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Company</th><th style="text-align:center;padding:10px;">Score</th></tr></thead><tbody>{bottom10_html}</tbody></table></div>
+    <div class="section"><h2>BEYOND STOCKS: Alternative Assets</h2><h3>🪙 Crypto</h3><p><b>Market Sentiment: <span style="font-weight:bold;">{context.get('crypto_sentiment', 'N/A')}</span></b> (via Fear & Greed Index).</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Asset</th><th style="text-align:left;padding:10px;">Price / 24h</th><th style="text-align:left;padding:10px;">Market Cap</th></tr></thead><tbody>{crypto_html}</tbody></table><h3 style="margin-top:30px;">💎 Commodities</h3><p><b>Key Insight: <span style="font-weight:bold;">{context.get('gold_silver_ratio', 'N/A')}</span></b>.</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Asset</th><th style="text-align:left;padding:10px;">Price / 24h</th><th style="text-align:left;padding:10px;">Market Cap</th></tr></thead><tbody>{commodities_html}</tbody></table></div>
+    <div class="section"><h2>FROM THE WIRE: Today's Top Headlines</h2>{market_news_html}</div>
+    </div></body></html>
+    """
 
 def generate_deep_dive_email(df_deep_dive):
     dive_html = ""
@@ -259,47 +264,6 @@ def generate_deep_dive_email(df_deep_dive):
     <div class="section"><h2>ON THE MICROSCOPE TODAY</h2><p>Following up on our weekly market overview, today we're zooming in on a specific selection from our watchlist. Here's a closer look at what's moving and why.</p>{dive_html}</div>
     </div></body></html>
     """
-    
-# --- The rest of the script remains unchanged from our stable version ---
-
-def generate_html_email(df_stocks, context, market_news, macro_data, memory, is_monday=False):
-    # This is the Monday email template.
-    def format_articles(articles):
-        if not articles: return "<p style='color:#888;'><i>No drivers detected.</i></p>"
-        return "<ul style='margin:0;padding-left:20px;'>" + "".join([f'<li style="margin-bottom:5px;"><a href="{a["url"]}" style="color:#1e3a8a;">{a["title"]}</a> <span style="color:#666;">({a["source"]})</span></li>' for a in articles]) + "</ul>"
-    def create_stock_table(df):
-        return "".join([f'<tr><td style="padding:10px;border-bottom:1px solid #eee;"><b>{row["ticker"]}</b><br><span style="color:#666;font-size:0.9em;">{row["name"]}</span></td><td style="padding:10px;border-bottom:1px solid #eee;text-align:center;font-weight:bold;font-size:1.1em;">{row["score"]:.0f}</td></tr>' for _, row in df.iterrows()])
-    def create_context_table(ids):
-        rows=""
-        for asset_id in ids:
-            if asset := context.get(asset_id):
-                price, change_24h = f"${asset.get('current_price', 0):,.2f}", asset.get('price_change_percentage_24h', 0) or 0
-                mcap = f"${asset.get('market_cap', 0) / 1_000_000_000:.1f}B" if asset.get('market_cap') else "N/A"
-                color_24h = "#16a34a" if change_24h >= 0 else "#dc2626"
-                rows += f'<tr><td style="padding:10px;border-bottom:1px solid #eee;"><b>{asset.get("name", "")}</b><br><span style="color:#666;font-size:0.9em;">{asset.get("symbol","").upper()}</span></td><td style="padding:10px;border-bottom:1px solid #eee;">{price}<br><span style="color:{color_24h};font-size:0.9em;">{change_24h:.2f}% (24h)</span></td><td style="padding:10px;border-bottom:1px solid #eee;">{mcap}</td></tr>'
-        return rows
-
-    prev_score, current_score = memory.get('previous_macro_score', 0), macro_data.get('overall_macro_score', 0)
-    mood_change = "stayed relatively stable"
-    if (diff := current_score - prev_score) > 3: mood_change = f"improved since yesterday (from {prev_score:.1f} to {current_score:.1f})"
-    elif diff < -3: mood_change = f"turned more cautious since yesterday (from {prev_score:.1f} to {current_score:.1f})"
-    editor_note = f"Good morning. The overall market mood has {mood_change}. This briefing is your daily blueprint for navigating the currents."
-    if memory.get('previous_top_stock_name'): editor_note += f"<br><br><b>Yesterday's Champion:</b> {memory['previous_top_stock_name']} ({memory['previous_top_stock_ticker']}) led our rankings. Let's see what's changed."
-
-    sector_html = ""
-    if not df_stocks.empty:
-        top_by_sector = df_stocks.groupby('sector', group_keys=False).apply(lambda x: x.nlargest(2, 'score'))
-        for _, row in top_by_sector.iterrows():
-            if not(row['sector'] and row['sector'] != 'N/A'): continue
-            summary_text = "Business summary not available."
-            if row["summary"] and isinstance(row["summary"], str): summary_text = '. '.join(row["summary"].split('. ')[:2]) + '.'
-            sector_html += f'<div style="margin-bottom:15px;"><b>{row["name"]} ({row["ticker"]})</b> in <i>{row["sector"]}</i><p style="font-size:0.9em;color:#333;margin:5px 0 0 0;">{summary_text}</p></div>'
-
-    top10_html, bottom10_html = create_stock_table(df_stocks.head(10)), create_stock_table(df_stocks.tail(10).iloc[::-1])
-    crypto_html, commodities_html = create_context_table(["bitcoin", "ethereum", "solana", "ripple"]), create_context_table(["gold", "silver"])
-    market_news_html = "".join([f'<div style="margin-bottom:15px;"><b><a href="{a["url"]}" style="color:#000;">{a["title"]}</a></b><br><span style="color:#666;font-size:0.9em;">{a.get("source", "N/A")}</span></div>' for a in market_news]) or "<p><i>Headlines not available today.</i></p>"
-    
-    return f"""... [The long Monday email template remains here] ...""" # Kept short for brevity
 
 def send_email(html_body, is_monday=False):
     import smtplib
@@ -325,7 +289,7 @@ def load_portfolio(filename=PORTFOLIO_FILE):
     return []
 
 async def run_monday_mode(output):
-    logging.info("🚀 Running in MONDAY MODE - Generating Weekly Watchlist...")
+    logging.info("🚀 Running in MONDAY MODE...")
     previous_day_memory = load_memory()
     sp500, tsx, portfolio = get_cached_tickers('sp500_cache.json', fetch_sp500_tickers_sync), get_cached_tickers('tsx_cache.json', fetch_tsx_tickers_sync), load_portfolio()
     universe = list(set((sp500 or [])[:75] + (tsx or [])[:25] + portfolio))
@@ -336,7 +300,7 @@ async def run_monday_mode(output):
         results, context_data, market_news, macro_data = await asyncio.gather(asyncio.gather(*tasks), fetch_context_data(session), fetch_market_headlines(), fetch_macro_sentiment(session))
 
     if not (stock_results := [r for r in results if r]):
-        logging.error("No stock data could be analyzed. Aborting Monday run."); return
+        logging.error("No stock data analyzed. Aborting Monday run."); return
 
     df_stocks = pd.DataFrame(stock_results).sort_values("score", ascending=False)
     weekly_watchlist = list(set(df_stocks.head(15)['ticker'].tolist() + df_stocks.tail(15)['ticker'].tolist() + portfolio))
@@ -352,8 +316,7 @@ async def run_monday_mode(output):
     logging.info("✅ Monday run complete.")
 
 async def run_daily_mode(output):
-    logging.info("🏃 Running in DAILY MODE - Processing next batch...")
-    
+    logging.info("🏃 Running in DAILY MODE...")
     if not os.path.exists(WEEKLY_STATE_FILE):
         logging.warning("weekly_state.json not found. Run in Monday mode first."); return
 
@@ -376,7 +339,7 @@ async def run_daily_mode(output):
         results = await asyncio.gather(*tasks)
 
     if not (deep_dive_results := [r for r in results if r]):
-        logging.warning("Could not analyze any stocks in the daily batch."); return
+        logging.warning("Could not analyze stocks in daily batch."); return
     
     df_deep_dive = pd.DataFrame(deep_dive_results)
 
