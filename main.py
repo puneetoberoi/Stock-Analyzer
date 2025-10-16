@@ -44,7 +44,6 @@ def fetch_sp500_tickers_sync():
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         df = pd.read_html(StringIO(requests.get(url, headers=REQUEST_HEADERS, timeout=15).text))[0]
-        # FIX: Standardize ticker format to prevent yfinance errors (e.g., BRK.B -> BRK-B)
         return [ticker.replace('.', '-') for ticker in df["Symbol"].tolist()]
     except Exception:
         df = pd.read_csv("https://datahub.io/core/s-and-p-500-companies/r/constituents.csv")
@@ -66,7 +65,6 @@ async def fetch_finviz_news_throttled(throttler, session, ticker):
         soup = BeautifulSoup(content, 'html.parser')
         news_table = soup.find(id='news-table')
         if not news_table: return []
-        # FIX: Use modern find_all to remove DeprecationWarning
         return [{"title": row.a.text, "url": row.a['href']} for row in news_table.find_all('tr') if row.a]
 
 async def fetch_market_headlines():
@@ -142,11 +140,9 @@ async def analyze_stock(throttler, session, ticker):
         if tech and 40 < tech.get("rsi", 50) < 65: score += 15
         if info.get('trailingPE') and 0 < info.get('trailingPE') < 35: score += 15
         score += avg_sent * 20
-        return { "ticker": ticker, "score": score, "name": info.get('shortName', ticker), "sector": info.get('sector', 'N/A'), "summary": info.get('longBusinessSummary', 'No summary available.') }
+        return { "ticker": ticker, "score": score, "name": info.get('shortName', ticker), "sector": info.get('sector', 'N/A'), "summary": info.get('longBusinessSummary', None) }
     except Exception as e:
-        # yfinance often logs its own errors, so we can keep our log cleaner
-        if '$' not in str(e): # Filter out the common "delisted" yfinance errors
-            logging.error(f"Error processing {ticker}: {e}", exc_info=False)
+        if '$' not in str(e): logging.error(f"Error processing {ticker}: {e}", exc_info=False)
         return None
 
 def load_memory():
@@ -162,8 +158,7 @@ async def main(output="print"):
     sp500, tsx = get_cached_tickers('sp500_cache.json', fetch_sp500_tickers_sync), get_cached_tickers('tsx_cache.json', fetch_tsx_tickers_sync)
     universe = (sp500 or [])[:75] + (tsx or [])[:25]
     
-    # FIX: Slow down the throttler to be more respectful to Finviz
-    throttler = Throttler(2) # Max 2 requests per second
+    throttler = Throttler(2)
     
     async with aiohttp.ClientSession() as session:
         stock_tasks = [analyze_stock(throttler, session, ticker) for ticker in universe]
@@ -202,16 +197,22 @@ def generate_html_email(df_stocks, context, market_news, memory):
 
     sector_html = ""
     if not df_stocks.empty:
-        # FIX: Correct way to groupby, apply, and then iterate without ambiguity
-        top_by_sector = df_stocks.groupby('sector').apply(lambda x: x.nlargest(1, 'score')).reset_index(drop=True)
-        for _, row in top_by_sector.iterrows():
+        # FIX: Added include_groups=False to silence FutureWarning and correct the logic
+        top_by_sector_groups = df_stocks.groupby('sector').apply(lambda x: x.nlargest(1, 'score'), include_groups=False).reset_index()
+        for _, row in top_by_sector_groups.iterrows():
             if row['sector'] == 'N/A' or row['sector'] is None: continue
-            sentences, short_summary = row["summary"].split('. '), '. '.join(sentences[:2]) + '.'
-            sector_html += f'<div style="margin-bottom: 15px;"><b>{row["name"]} ({row["ticker"]})</b> in <i>{row["sector"]}</i><p style="font-size: 0.9em; color: #333; margin: 5px 0 0 0;">{short_summary}</p></div>'
+            
+            # FIX: Defensive handling of the summary to prevent UnboundLocalError
+            summary_text = "Business summary not available."
+            if row["summary"] and isinstance(row["summary"], str):
+                sentences = row["summary"].split('. ')
+                summary_text = '. '.join(sentences[:2]) + '.'
+
+            sector_html += f'<div style="margin-bottom: 15px;"><b>{row["name"]} ({row["ticker"]})</b> in <i>{row["sector"]}</i><p style="font-size: 0.9em; color: #333; margin: 5px 0 0 0;">{summary_text}</p></div>'
 
     top10_html, bottom10_html = create_stock_table_rows(df_stocks.head(10)), create_stock_table_rows(df_stocks.tail(10).iloc[::-1])
     crypto_html, commodities_html = create_context_table(["bitcoin", "ethereum", "solana", "ripple"]), create_context_table(["gold", "silver"])
-    market_news_html = "".join([f'<div style="margin-bottom: 15px;"><b><a href="{a["url"]}" style="color: #000; text-decoration: none; font-size: 1.1em;">{a["title"]}</a></b><br><span style="color: #666; font-size: 0.9em;">{a.get("source", "N/A")}</span></div>' for a in market_news]) or "<p><i>Headlines not available.</i></p>"
+    market_news_html = "".join([f'<div style="margin-bottom: 15px;"><b><a href="{a["url"]}" style="color: #000; text-decoration: none; font-size: 1.1em;">{a["title"]}</a></b><br><span style="color: #666; font-size: 0.9em;">{a.get("source", "N/A")}</span></div>' for a in market_news]) or "<p><i>Headlines not available today.</i></p>"
 
     return f"""
     <!DOCTYPE html><html><head><style>body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background-color:#f7f7f7;}} .container{{width:100%;max-width:700px;margin:20px auto;background-color:#fff;border:1px solid #ddd;}} .header{{background-color:#0c0a09;color:#fff;padding:30px;text-align:center;}} .section{{padding:25px;border-bottom:1px solid #ddd;}} .section h2{{font-size:1.5em;color:#111;margin-top:0;}} .section h3{{font-size:1.2em;color:#333;border-bottom:2px solid #e2e8f0;padding-bottom:5px;}}</style></head><body><div class="container">
@@ -249,4 +250,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the daily market analysis.")
     parser.add_argument("--output", default="print", choices=["print", "email"], help="Output destination.")
     args = parser.parse_args()
+    # FIX: Add a handler for yfinance's TzCache info message to keep logs clean
+    yf.set_tz_cache_location(os.path.join(os.path.dirname(os.path.abspath(__file__)), "yf_cache"))
     asyncio.run(main(output=args.output))
