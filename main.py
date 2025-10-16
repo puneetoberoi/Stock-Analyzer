@@ -169,6 +169,7 @@ async def analyze_competitor_lite(throttler, session, ticker):
         return { "name": info.get('shortName', ticker), "ticker": ticker, "score": score, "headline": general_news[0] if general_news else None }
     except Exception: return None
 
+# RESTORED THIS CRITICAL FUNCTION
 async def fetch_market_headlines():
     async with aiohttp.ClientSession() as session:
         try:
@@ -186,6 +187,7 @@ async def fetch_market_headlines():
                 return [{"title": a['title'], "url": a['url'], "source": a['source']['name']} for a in articles]
     return []
 
+# RESTORED THIS CRITICAL FUNCTION
 async def fetch_macro_sentiment(session):
     if not NEWSAPI_KEY: return {"geopolitical_risk": 0, "trade_risk": 0, "economic_sentiment": 0, "overall_macro_score": 0, "geo_articles": [], "trade_articles": [], "econ_articles": []}
     async def get_news(query):
@@ -198,6 +200,7 @@ async def fetch_macro_sentiment(session):
     overall_macro_score = -(geopolitical_risk / 100 * 15) - (trade_risk / 100 * 10) + (economic_sentiment * 15)
     return { "geopolitical_risk": geopolitical_risk, "trade_risk": trade_risk, "economic_sentiment": economic_sentiment, "overall_macro_score": overall_macro_score, "geo_articles": [{"title": a['title'], "url": a['url'], "source": a['source']['name']} for a in geo_articles[:3]], "trade_articles": [{"title": a['title'], "url": a['url'], "source": a['source']['name']} for a in trade_articles[:3]], "econ_articles": [{"title": a['title'], "url": a['url'], "source": a['source']['name']} for a in econ_articles[:3]] }
 
+# RESTORED THIS CRITICAL FUNCTION
 async def fetch_context_data(session):
     ids = ["bitcoin", "ethereum", "solana", "ripple"]
     url = f"https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids={','.join(ids)}"
@@ -213,7 +216,7 @@ async def fetch_context_data(session):
     fg_content = await make_robust_request(session, "https://api.alternative.me/fng/?limit=1")
     context_data['crypto_sentiment'] = json.loads(fg_content)['data'][0]['value_classification'] if fg_content else "N/A"
     return context_data
-
+    
 async def analyze_stock(semaphore, throttler, session, ticker, all_stocks_df=None):
     async with semaphore:
         try:
@@ -346,13 +349,6 @@ def send_email(html_body, is_monday=False):
             server.starttls(); server.login(SMTP_USER, SMTP_PASS); server.send_message(msg)
         logging.info("✅ Email sent successfully.")
     except Exception as e: logging.error(f"Failed to send email: {e}")
-
-def load_portfolio(filename=PORTFOLIO_FILE):
-    if os.path.exists(filename):
-        try:
-            with open(filename, 'r') as f: return json.load(f)
-        except json.JSONDecodeError: return []
-    return []
 
 async def run_monday_mode(output):
     logging.info("🚀 Running in MONDAY MODE...")
