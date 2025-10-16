@@ -1,9 +1,21 @@
-name: Daily Market Report
+name: Market Strategist Briefing
 
 on:
+  # Schedule to run the "Monday Market Setter" every Monday at 11:00 UTC
   schedule:
-    - cron: "0 */11 * * *"   # Runs daily at 14:00 UTC
+    - cron: "0 11 * * 1"   # 1 at the end means Monday
+  
+  # Manual trigger with selectable modes for testing
   workflow_dispatch:
+    inputs:
+      run_mode:
+        description: 'Select the run mode'
+        required: true
+        default: 'daily'
+        type: choice
+        options:
+        - daily
+        - monday
 
 jobs:
   run-report:
@@ -24,13 +36,34 @@ jobs:
           pip install pandas yfinance requests numpy aiohttp beautifulsoup4 lxml vaderSentiment ta asyncio-throttle playwright
           python -m playwright install --with-deps chromium
           
-      - name: Run daily market report
+      - name: Determine Run Mode
+        id: mode_determiner
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "mode=${{ inputs.run_mode }}" >> $GITHUB_OUTPUT
+            echo "Running in MANUAL mode: ${{ inputs.run_mode }}"
+          else
+            echo "mode=monday" >> $GITHUB_OUTPUT
+            echo "Running in SCHEDULED mode: monday"
+          fi
+
+      - name: Run Market Strategist
         env:
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
-          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
-          ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         run: |
-          python main.py --output email
+          python main.py --mode ${{ steps.mode_determiner.outputs.mode }} --output email
+
+      - name: Commit state files
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'actions-bot@github.com'
+          git add weekly_state.json market_memory.json || echo "No state files to commit"
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "State files are unchanged."
+          else
+            git commit -m "Update weekly state and memory files"
+            git push
+          fi
