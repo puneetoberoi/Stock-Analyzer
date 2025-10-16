@@ -1,40 +1,39 @@
 {
   "start_date": "2025-10-16",
   "watchlist": [
-    "AIZ",
-    "TD",
-    "AAPL",
-    "AWK",
-    "BKNG",
-    "APD",
-    "ARE",
-    "AXP",
-    "ABBV",
-    "AMD",
-    "AMGN",
-    "BAX",
-    "ALB",
-    "NVDA",
-    "TSM",
-    "GOOGL",
-    "ALLE",
-    "MMM",
-    "TECH",
-    "TSLA",
-    "MO",
-    "APTV",
-    "AXON",
-    "ABT",
-    "ADP",
-    "AJG",
     "AMZN",
-    "BAC",
-    "BK",
-    "MSFT",
+    "AAPL",
+    "ABT",
+    "AMGN",
+    "MMM",
+    "AXP",
     "BBY",
-    "BRK-B",
+    "BAX",
+    "MSFT",
     "AON",
-    "AMAT"
+    "ABBV",
+    "BK",
+    "BAC",
+    "NVDA",
+    "GOOGL",
+    "BKNG",
+    "MO",
+    "AXON",
+    "BRK-B",
+    "AMD",
+    "TD",
+    "AWK",
+    "APD",
+    "AJG",
+    "AMAT",
+    "APTV",
+    "ALLE",
+    "AIZ",
+    "TECH",
+    "ALB",
+    "ADP",
+    "TSLA",
+    "TSM"
   ],
   "processed_tickers": [],
   "full_watchlist_data": [
@@ -111,16 +110,16 @@
       "sector": "Technology"
     },
     {
-      "ticker": "GOOGL",
-      "sector": "Communication Services"
-    },
-    {
       "ticker": "TECH",
       "sector": "Healthcare"
     },
     {
       "ticker": "ABBV",
       "sector": "Healthcare"
+    },
+    {
+      "ticker": "GOOGL",
+      "sector": "Communication Services"
     },
     {
       "ticker": "AON",
@@ -161,10 +160,6 @@
     {
       "ticker": "APD",
       "sector": "Basic Materials"
-    },
-    {
-      "ticker": "ARE",
-      "sector": "Real Estate"
     },
     {
       "ticker": "BKNG",
