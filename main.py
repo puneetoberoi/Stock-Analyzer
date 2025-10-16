@@ -16,10 +16,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logging.getLogger('yfinance').setLevel(logging.WARNING)
 REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"}
 MEMORY_FILE = "market_memory.json"
+WEEKLY_STATE_FILE = "weekly_state.json"
+PORTFOLIO_FILE = "portfolio.json"
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 analyzer = SentimentIntensityAnalyzer()
 
-# ---------- helpers ----------
+# ---------- STABLE, UNCHANGED HELPERS ----------
 
 async def make_robust_request(session, url, params=None, retries=3, delay=5, timeout=20):
     for attempt in range(retries):
@@ -121,7 +123,6 @@ async def fetch_context_data(session):
     context_data['crypto_sentiment'] = json.loads(fg_content)['data'][0]['value_classification'] if fg_content else "N/A"
     return context_data
 
-# RESTORED THIS CRITICAL FUNCTION
 def compute_technical_indicators(series):
     if len(series.dropna()) < 50: return None
     df = pd.DataFrame({"close": series})
@@ -157,34 +158,7 @@ def load_memory():
 def save_memory(data):
     with open(MEMORY_FILE, 'w') as f: json.dump(data, f)
 
-async def main(output="print"):
-    previous_day_memory = load_memory()
-    sp500, tsx = get_cached_tickers('sp500_cache.json', fetch_sp500_tickers_sync), get_cached_tickers('tsx_cache.json', fetch_tsx_tickers_sync)
-    universe = (sp500 or [])[:75] + (tsx or [])[:25]
-    
-    throttler = Throttler(2)
-    semaphore = asyncio.Semaphore(10)
-    
-    async with aiohttp.ClientSession() as session:
-        stock_tasks = [analyze_stock(semaphore, throttler, session, ticker) for ticker in universe]
-        context_task = fetch_context_data(session)
-        news_task = fetch_market_headlines()
-        macro_task = fetch_macro_sentiment(session)
-        results, context_data, market_news, macro_data = await asyncio.gather(asyncio.gather(*stock_tasks), context_task, news_task, macro_task)
-
-    stock_results = [r for r in results if r]
-    df_stocks = pd.DataFrame(stock_results).sort_values("score", ascending=False) if stock_results else pd.DataFrame()
-    
-    if output == "email":
-        html_email = generate_html_email(df_stocks, context_data, market_news, macro_data, previous_day_memory)
-        send_email(html_email)
-    
-    if not df_stocks.empty:
-        save_memory({"previous_top_stock_name": df_stocks.iloc[0]['name'], "previous_top_stock_ticker": df_stocks.iloc[0]['ticker'], "previous_macro_score": macro_data.get('overall_macro_score', 0)})
-
-    logging.info("✅ Done.")
-
-def generate_html_email(df_stocks, context, market_news, macro_data, memory):
+def generate_html_email(df_stocks, context, market_news, macro_data, memory, is_monday=False):
     def format_articles(articles):
         if not articles: return "<p style='color:#888;'><i>No specific news drivers detected.</i></p>"
         return "<ul style='margin:0;padding-left:20px;'>" + "".join([f'<li style="margin-bottom:5px;"><a href="{a["url"]}" style="color:#1e3a8a;">{a["title"]}</a> <span style="color:#666;">({a["source"]})</span></li>' for a in articles]) + "</ul>"
@@ -219,39 +193,93 @@ def generate_html_email(df_stocks, context, market_news, macro_data, memory):
     top10_html, bottom10_html = create_stock_table(df_stocks.head(10)), create_stock_table(df_stocks.tail(10).iloc[::-1])
     crypto_html, commodities_html = create_context_table(["bitcoin", "ethereum", "solana", "ripple"]), create_context_table(["gold", "silver"])
     market_news_html = "".join([f'<div style="margin-bottom:15px;"><b><a href="{a["url"]}" style="color:#000;">{a["title"]}</a></b><br><span style="color:#666;font-size:0.9em;">{a.get("source", "N/A")}</span></div>' for a in market_news]) or "<p><i>Headlines not available today.</i></p>"
-
+    
     return f"""
     <!DOCTYPE html><html><head><style>body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background-color:#f7f7f7;}} .container{{width:100%;max-width:700px;margin:20px auto;background-color:#fff;border:1px solid #ddd;}} .header{{background-color:#0c0a09;color:#fff;padding:30px;text-align:center;}} .section{{padding:25px;border-bottom:1px solid #ddd;}} h2{{font-size:1.5em;color:#111;margin-top:0;}} h3{{font-size:1.2em;color:#333;border-bottom:2px solid #e2e8f0;padding-bottom:5px;}}</style></head><body><div class="container">
     <div class="header"><h1>Your Daily Intelligence Briefing</h1><p style="font-size:1.1em; color:#aaa;">{datetime.date.today().strftime('%A, %B %d, %Y')}</p></div>
     <div class="section"><h2>EDITOR’S NOTE</h2><p>{editor_note}</p></div>
-    <div class="section"><h2>THE BIG PICTURE: The Market Weather Report</h2>
-        <h3>Overall Macro Score: {macro_data['overall_macro_score']:.1f} / 30</h3>
-        <p><b>How it's calculated:</b> This is our "weather forecast" for investors, combining risks and sentiment. A positive score suggests optimism ("risk-on"), while negative signals caution ("risk-off"). It's a blend of the three scores below.</p>
-        <p><b>🌍 Geopolitical Risk ({macro_data['geopolitical_risk']:.0f}/100):</b> Measures global instability by scanning news for conflict-related keywords. High scores favor safe-havens like Gold.<br><u>Key Drivers:</u> {format_articles(macro_data['geo_articles'])}</p>
-        <p><b>🚢 Trade Risk ({macro_data['trade_risk']:.0f}/100):</b> Tracks mentions of 'trade war', 'tariffs', etc. High risk can hurt multinational companies.<br><u>Key Drivers:</u> {format_articles(macro_data['trade_articles'])}</p>
-        <p><b>💼 Economic Sentiment ({macro_data['economic_sentiment']:.2f}):</b> Analyzes the emotional tone of news about inflation, rates, and growth (-1 bearish, +1 bullish).<br><u>Key Drivers:</u> {format_articles(macro_data['econ_articles'])}</p>
-    </div>
-    <div class="section"><h2>SECTOR DEEP DIVE</h2><p>Here are the top-scoring companies from different sectors, giving a cross-section of the market's strongest narratives.</p>{sector_html}</div>
-    <div class="section"><h2>STOCK RADAR</h2>
-        <h3>📈 Top 10 Strongest Signals</h3><p><b>How it's calculated:</b> Stocks are scored (0-100) on a blend of valuation (e.g., P/E ratio), momentum (e.g., RSI), and recent news sentiment. High scores indicate strength across multiple factors.</p><table style="width:100%; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding:10px;">Company</th><th style="text-align:center; padding:10px;">Score</th></tr></thead><tbody>{top10_html}</tbody></table>
-        <h3 style="margin-top: 30px;">📉 Top 10 Weakest Signals</h3><p>These stocks are facing headwinds. This is a prompt to investigate why.</p><table style="width:100%; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding:10px;">Company</th><th style="text-align:center; padding:10px;">Score</th></tr></thead><tbody>{bottom10_html}</tbody></table>
-    </div>
-    <div class="section"><h2>BEYOND STOCKS: Alternative Assets</h2>
-        <h3>🪙 Crypto: The Digital Frontier</h3><p><b>Market Sentiment: <span style="font-weight:bold;">{context.get('crypto_sentiment', 'N/A')}</span></b> (via Fear & Greed Index). Shows investor emotion, from Extreme Fear (potential buying opportunity) to Extreme Greed (market may be due for a correction).</p><table style="width:100%; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding:10px;">Asset</th><th style="text-align:left; padding:10px;">Price / 24h</th><th style="text-align:left; padding:10px;">Market Cap</th></tr></thead><tbody>{crypto_html}</tbody></table>
-        <h3 style="margin-top: 30px;">💎 Commodities: The Bedrock Assets</h3><p><b>Key Insight: <span style="font-weight:bold;">{context.get('gold_silver_ratio', 'N/A')}</span></b>. Shows how many ounces of silver it takes to buy one ounce of gold. A high number suggests silver is undervalued relative to gold, and vice-versa.</p><table style="width:100%; border-collapse: collapse;"><thead><tr><th style="text-align:left; padding:10px;">Asset</th><th style="text-align:left; padding:10px;">Price / 24h</th><th style="text-align:left; padding:10px;">Market Cap</th></tr></thead><tbody>{commodities_html}</tbody></table>
-    </div>
+    <div class="section"><h2>THE BIG PICTURE: The Market Weather Report</h2><h3>Overall Macro Score: {macro_data['overall_macro_score']:.1f} / 30</h3><p><b>How it's calculated:</b> A blend of the three scores below. Positive suggests optimism ("risk-on"), negative signals caution ("risk-off").</p><p><b>🌍 Geopolitical Risk ({macro_data['geopolitical_risk']:.0f}/100):</b> Measures global instability by scanning news for conflict keywords.<br><u>Key Drivers:</u> {format_articles(macro_data['geo_articles'])}</p><p><b>🚢 Trade Risk ({macro_data['trade_risk']:.0f}/100):</b> Tracks mentions of 'trade war', 'tariffs', etc.<br><u>Key Drivers:</u> {format_articles(macro_data['trade_articles'])}</p><p><b>💼 Economic Sentiment ({macro_data['economic_sentiment']:.2f}):</b> Analyzes the tone of news about inflation, rates, and growth (-1 to +1).<br><u>Key Drivers:</u> {format_articles(macro_data['econ_articles'])}</p></div>
+    <div class="section"><h2>SECTOR DEEP DIVE</h2><p>Here are the top-scoring companies from different sectors.</p>{sector_html}</div>
+    <div class="section"><h2>STOCK RADAR</h2><h3>📈 Top 10 Strongest Signals</h3><p><b>How it's calculated:</b> Stocks are scored (0-100) on a blend of valuation (P/E), momentum (RSI), and news sentiment.</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Company</th><th style="text-align:center;padding:10px;">Score</th></tr></thead><tbody>{top10_html}</tbody></table><h3 style="margin-top:30px;">📉 Top 10 Weakest Signals</h3><p>These stocks are facing headwinds. This is a prompt to investigate why.</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Company</th><th style="text-align:center;padding:10px;">Score</th></tr></thead><tbody>{bottom10_html}</tbody></table></div>
+    <div class="section"><h2>BEYOND STOCKS: Alternative Assets</h2><h3>🪙 Crypto</h3><p><b>Market Sentiment: <span style="font-weight:bold;">{context.get('crypto_sentiment', 'N/A')}</span></b> (via Fear & Greed Index).</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Asset</th><th style="text-align:left;padding:10px;">Price / 24h</th><th style="text-align:left;padding:10px;">Market Cap</th></tr></thead><tbody>{crypto_html}</tbody></table><h3 style="margin-top:30px;">💎 Commodities</h3><p><b>Key Insight: <span style="font-weight:bold;">Gold/Silver Ratio at {context.get('gold_silver_ratio', 'N/A')}</span></b>.</p><table style="width:100%;"><thead><tr><th style="text-align:left;padding:10px;">Asset</th><th style="text-align:left;padding:10px;">Price / 24h</th><th style="text-align:left;padding:10px;">Market Cap</th></tr></thead><tbody>{commodities_html}</tbody></table></div>
     <div class="section"><h2>FROM THE WIRE: Today's Top Headlines</h2>{market_news_html}</div>
     </div></body></html>
     """
 
-def send_email(html_body):
+# --- NEW ADDITIONS FOR FEATURE 1 ---
+
+def load_portfolio(filename=PORTFOLIO_FILE):
+    """Safely loads the personal portfolio from a JSON file."""
+    if os.path.exists(filename):
+        try:
+            with open(filename, 'r') as f: return json.load(f)
+        except json.JSONDecodeError:
+            logging.error(f"Could not decode {filename}. Please ensure it's a valid JSON list of tickers.")
+            return []
+    logging.warning(f"Portfolio file '{filename}' not found. Skipping.")
+    return []
+
+async def run_monday_mode(output):
+    logging.info("🚀 Running in MONDAY MODE - Generating Weekly Watchlist...")
+    previous_day_memory = load_memory()
+    sp500, tsx, portfolio = get_cached_tickers('sp500_cache.json', fetch_sp500_tickers_sync), get_cached_tickers('tsx_cache.json', fetch_tsx_tickers_sync), load_portfolio()
+    universe = list(set((sp500 or [])[:75] + (tsx or [])[:25] + portfolio))
+    
+    throttler, semaphore = Throttler(2), asyncio.Semaphore(10)
+    
+    async with aiohttp.ClientSession() as session:
+        tasks = [analyze_stock(semaphore, throttler, session, ticker) for ticker in universe]
+        results, context_data, market_news, macro_data = await asyncio.gather(
+            asyncio.gather(*tasks), fetch_context_data(session), fetch_market_headlines(), fetch_macro_sentiment(session)
+        )
+
+    if not (stock_results := [r for r in results if r]):
+        logging.error("No stock data could be analyzed. Aborting Monday run."); return
+
+    df_stocks = pd.DataFrame(stock_results).sort_values("score", ascending=False)
+    
+    weekly_watchlist = list(set(df_stocks.head(15)['ticker'].tolist() + df_stocks.tail(15)['ticker'].tolist() + portfolio))
+    logging.info(f"Generated a weekly watchlist with {len(weekly_watchlist)} unique stocks.")
+    
+    with open(WEEKLY_STATE_FILE, 'w') as f:
+        json.dump({"start_date": datetime.date.today().isoformat(), "watchlist": weekly_watchlist, "processed_tickers": []}, f, indent=2)
+
+    if output == "email":
+        html_email = generate_html_email(df_stocks, context_data, market_news, macro_data, previous_day_memory, is_monday=True)
+        send_email(html_email, is_monday=True)
+    
+    if not df_stocks.empty:
+        save_memory({"previous_top_stock_name": df_stocks.iloc[0]['name'], "previous_top_stock_ticker": df_stocks.iloc[0]['ticker'], "previous_macro_score": macro_data.get('overall_macro_score', 0)})
+    logging.info("✅ Monday Market Setter run complete.")
+
+async def run_daily_mode(output):
+    logging.info("🏃 Running in DAILY MODE - Processing next batch...")
+    # This is a placeholder for Feature 2. It demonstrates the logic.
+    if os.path.exists(WEEKLY_STATE_FILE):
+        with open(WEEKLY_STATE_FILE, 'r') as f: state = json.load(f)
+        processed, watchlist = set(state.get("processed_tickers", [])), state.get("watchlist", [])
+        to_process = [ticker for ticker in watchlist if ticker not in processed]
+        next_batch = to_process[:5]
+        
+        print("\n--- Daily Deep Dive Plan ---")
+        if next_batch:
+            print(f"Watchlist: {len(watchlist)} stocks. Processed: {len(processed)}. Remaining: {len(to_process)}.")
+            print(f"Next batch to analyze: {next_batch}")
+            # Here is where we would call the deep dive analysis on `next_batch`
+        else:
+            print("All stocks in the weekly watchlist have been processed!")
+    else:
+        print("weekly_state.json not found. Run in Monday mode first to generate a watchlist.")
+
+def send_email(html_body, is_monday=False):
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     SMTP_USER, SMTP_PASS = os.getenv("SMTP_USER"), os.getenv("SMTP_PASS")
     if not SMTP_USER or not SMTP_PASS: logging.warning("SMTP creds missing."); return
+    subject = "⛵ Your Weekly Market Setter" if is_monday else "🔬 Your Daily Deep Dive"
     msg = MIMEMultipart('alternative')
-    msg["Subject"], msg["From"], msg["To"] = f"⛵ Your Daily Market Briefing - {datetime.date.today()}", SMTP_USER, SMTP_USER
+    msg["Subject"], msg["From"], msg["To"] = f"{subject} - {datetime.date.today()}", SMTP_USER, SMTP_USER
     msg.attach(MIMEText(html_body, 'html'))
     try:
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
@@ -259,9 +287,22 @@ def send_email(html_body):
         logging.info("✅ Email sent successfully.")
     except Exception as e: logging.error(f"Failed to send email: {e}")
 
+# --- NEW MAIN EXECUTION BLOCK ---
+async def main(mode="daily", output="print"):
+    if mode == "monday":
+        await run_monday_mode(output)
+    else:
+        await run_daily_mode(output)
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output", default="print", choices=["print", "email"])
+    parser = argparse.ArgumentParser(description="Run the Market Strategist briefing.")
+    parser.add_argument("--mode", default="daily", choices=["daily", "monday"], help="Run mode.")
+    parser.add_argument("--output", default="print", choices=["print", "email"], help="Output destination.")
     args = parser.parse_args()
+    
+    yf_cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yf_cache")
+    os.makedirs(yf_cache_path, exist_ok=True)
+    yf.set_tz_cache_location(yf_cache_path)
+
     if os.name == 'nt': asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main(output=args.output))
+    asyncio.run(main(mode=args.mode, output=args.output))
