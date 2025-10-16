@@ -1,9 +1,11 @@
 name: Market Strategist Briefing
 
 on:
+  # Schedule to run the "Monday Market Setter" every Monday at 11:00 UTC
   schedule:
-    - cron: "0 11 * * 1"
+    - cron: "0 11 * * 1"   # 1 at the end means Monday
   
+  # Manual trigger with selectable modes for testing
   workflow_dispatch:
     inputs:
       run_mode:
@@ -17,9 +19,9 @@ on:
 
 jobs:
   run-report:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
-    # THE FIX IS HERE: Grant write permissions to the job
+    # Grant write permissions to the job to commit state files
     permissions:
       contents: write
 
@@ -52,6 +54,7 @@ jobs:
       - name: Run Market Strategist
         env:
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+          ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }} # Make sure this secret is set
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
         run: |
