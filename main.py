@@ -227,7 +227,7 @@ def generate_deep_dive_email(df_deep_dive):
             </div>
             """
     else:
-        dive_html = "<p>No stocks were analyzed in today's deep dive.</p>"
+        dive_html = "<p>No stocks were analyzed in today's deep dive. This may happen if the analysis for the selected stocks failed.</p>"
 
     return f"""
     <!DOCTYPE html><html><head><style>body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background-color:#f7f7f7;}} .container{{width:100%;max-width:700px;margin:20px auto;background-color:#fff;border:1px solid #ddd;}} .header{{background-color:#1d4ed8;color:#fff;padding:30px;text-align:center;}} .section{{padding:25px;border-bottom:1px solid #ddd;}} h2{{font-size:1.5em;color:#111;margin-top:0;}} h3{{font-size:1.2em;color:#333;}}</style></head><body><div class="container">
@@ -309,7 +309,6 @@ async def run_daily_mode(output):
     with open(WEEKLY_STATE_FILE, 'r') as f:
         state = json.load(f)
 
-    # Check if the week has expired
     start_date = datetime.date.fromisoformat(state.get("start_date", "1970-01-01"))
     if (datetime.date.today() - start_date).days >= 7:
         logging.info("Weekly watchlist has expired. Please run in Monday mode to start a new week.")
@@ -320,7 +319,6 @@ async def run_daily_mode(output):
     
     if not to_process:
         logging.info("🎉 All stocks in the weekly watchlist have been processed! See you next Monday.")
-        # Optionally, send a "week complete" email here
         return
 
     next_batch = to_process[:5]
@@ -335,7 +333,8 @@ async def run_daily_mode(output):
     deep_dive_results = [r for r in results if r]
     
     if not deep_dive_results:
-        logging.warning("Could not analyze any stocks in the daily batch.")
+        logging.warning("Could not analyze any stocks in the daily batch. No email will be sent.")
+        return # Exit gracefully if no data
     
     df_deep_dive = pd.DataFrame(deep_dive_results)
 
@@ -343,7 +342,6 @@ async def run_daily_mode(output):
         html_email = generate_deep_dive_email(df_deep_dive)
         send_email(html_email, is_monday=False)
 
-    # Update the state file with the stocks we just processed
     state["processed_tickers"].extend(next_batch)
     with open(WEEKLY_STATE_FILE, 'w') as f:
         json.dump(state, f, indent=2)
