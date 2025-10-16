@@ -1,11 +1,9 @@
 name: Market Strategist Briefing
 
 on:
-  # Schedule to run the "Monday Market Setter" every Monday at 11:00 UTC
   schedule:
-    - cron: "0 11 * * 1"   # 1 at the end means Monday
+    - cron: "0 11 * * 1"
   
-  # Manual trigger with selectable modes for testing
   workflow_dispatch:
     inputs:
       run_mode:
@@ -20,6 +18,10 @@ on:
 jobs:
   run-report:
     runs-on: ubuntu-22.04
+
+    # THE FIX IS HERE: Grant write permissions to the job
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -60,7 +62,6 @@ jobs:
           git config --global user.name 'GitHub Actions Bot'
           git config --global user.email 'actions-bot@github.com'
           git add weekly_state.json market_memory.json || echo "No state files to commit"
-          # Check if there are changes to commit
           if git diff --staged --quiet; then
             echo "State files are unchanged."
           else
