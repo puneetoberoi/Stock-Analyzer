@@ -36,5 +36,11 @@
     "APTV",
     "ALLE"
   ],
-  "processed_tickers": []
+  "processed_tickers": [
+    "MO",
+    "AKAM",
+    "TECH",
+    "BAX",
+    "BKNG"
+  ]
 }
