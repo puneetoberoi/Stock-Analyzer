@@ -1,40 +1,40 @@
 {
   "start_date": "2025-10-16",
   "watchlist": [
-    "AMZN",
     "ALB",
-    "BK",
-    "BRK-B",
-    "ALLE",
-    "ARE",
-    "BAC",
-    "AIZ",
-    "MMM",
-    "AFL",
-    "BBY",
-    "ADP",
-    "AMD",
-    "NVDA",
-    "BKNG",
-    "TSM",
-    "TD",
-    "MSFT",
-    "AKAM",
-    "AMAT",
-    "AAPL",
     "AWK",
-    "ABT",
-    "AMGN",
-    "GOOGL",
-    "APTV",
-    "AJG",
-    "TSLA",
+    "MSFT",
+    "BRK-B",
+    "BK",
     "APD",
+    "TSLA",
     "AON",
-    "AXP",
+    "AMAT",
+    "APTV",
+    "BAX",
+    "AIZ",
+    "AMGN",
+    "TSM",
+    "ABBV",
+    "AJG",
+    "ALLE",
     "AXON",
-    "MO",
-    "BAX"
+    "AMD",
+    "AAPL",
+    "BKNG",
+    "TD",
+    "BAC",
+    "ABT",
+    "GOOGL",
+    "MMM",
+    "ARE",
+    "AMZN",
+    "AXP",
+    "TECH",
+    "BBY",
+    "NVDA",
+    "ADP",
+    "MO"
   ],
   "processed_tickers": [],
   "full_watchlist_data": [
@@ -91,16 +91,12 @@
       "sector": "Financial Services"
     },
     {
-      "ticker": "AKAM",
+      "ticker": "TSM",
       "sector": "Technology"
     },
     {
       "ticker": "AMGN",
       "sector": "Healthcare"
-    },
-    {
-      "ticker": "TSM",
-      "sector": "Technology"
     },
     {
       "ticker": "TD",
@@ -119,6 +115,14 @@
       "sector": "Communication Services"
     },
     {
+      "ticker": "TECH",
+      "sector": "Healthcare"
+    },
+    {
+      "ticker": "ABBV",
+      "sector": "Healthcare"
+    },
+    {
       "ticker": "MSFT",
       "sector": "Technology"
     },
@@ -133,10 +137,6 @@
     {
       "ticker": "AMAT",
       "sector": "Technology"
-    },
-    {
-      "ticker": "AFL",
-      "sector": "Financial Services"
     },
     {
       "ticker": "TSLA",
